@@ -384,21 +384,44 @@ def render_overview(df: pd.DataFrame) -> None:
 
     with ch2:
         st.markdown('<div class="section-divider">Score Distribution</div>', unsafe_allow_html=True)
-        fig_hist = go.Figure(go.Histogram(
-            x=df["score"].dropna(),
-            nbinsx=20,
-            marker=dict(color="#3d8ef8", opacity=0.8),
-            hovertemplate="Score: %{x}<br>Count: %{y}<extra></extra>",
-        ))
-        fig_hist.add_vline(x=82, line_color="#00e97a", line_dash="dash",
-                           annotation_text="Tier A", annotation_font_color="#00e97a")
-        fig_hist.add_vline(x=69, line_color="#3d8ef8", line_dash="dash",
-                           annotation_text="Tier B", annotation_font_color="#3d8ef8")
+        scores = df["score"].dropna()
+        avg = round(scores.mean(), 1)
+
+        tier_bands = [
+            ("Tier A (≥82)", scores[scores >= 82],        "#00e97a"),
+            ("Tier B (69–81)", scores[(scores >= 69) & (scores < 82)], "#3d8ef8"),
+            ("Tier C (55–68)", scores[(scores >= 55) & (scores < 69)], "#f5a623"),
+            ("Tier D (<55)",  scores[scores < 55],         "#253650"),
+        ]
+
+        fig_hist = go.Figure()
+        for label, band_scores, color in tier_bands:
+            fig_hist.add_trace(go.Histogram(
+                x=band_scores,
+                nbinsx=20,
+                name=label,
+                marker=dict(color=color, opacity=0.85),
+                hovertemplate=f"<b>{label}</b><br>Score: %{{x}}<br>Count: %{{y}}<extra></extra>",
+            ))
+
+        # Average line
+        fig_hist.add_vline(
+            x=avg, line_color="#ffffff", line_dash="dot", line_width=1.5,
+            annotation_text=f"avg {avg}",
+            annotation_font_color="#ffffff",
+            annotation_position="top right",
+        )
+        # Tier threshold lines
+        fig_hist.add_vline(x=82, line_color="#00e97a", line_dash="dash", line_width=1)
+        fig_hist.add_vline(x=69, line_color="#3d8ef8", line_dash="dash", line_width=1)
+
         fig_hist.update_layout(
+            barmode="stack",
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             xaxis=dict(color="#4a5878", gridcolor="#141b26", title="Score"),
-            yaxis=dict(color="#8b9ab5", gridcolor="#141b26"),
-            margin=dict(t=20, b=0, l=0, r=0), height=220,
+            yaxis=dict(color="#8b9ab5", gridcolor="#141b26", title="Leads"),
+            legend=dict(font=dict(color="#8b9ab5", size=11), bgcolor="rgba(0,0,0,0)"),
+            margin=dict(t=20, b=0, l=0, r=0), height=240,
             font=dict(color="#8b9ab5"),
         )
         st.plotly_chart(fig_hist, use_container_width=True)
