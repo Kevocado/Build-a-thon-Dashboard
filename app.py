@@ -1,14 +1,16 @@
 import pandas as pd
-import requests
 import streamlit as st
+import streamlit.components.v1 as components
 
 
-DIRECT_LINE_BASE_URL = "https://directline.botframework.com/v3/directline"
-USER_ID = "streamlit-user"
-REQUEST_TIMEOUT = 30
 CSV_URL = (
     "https://docs.google.com/spreadsheets/d/"
     "1DfkJfbrmAYICQaxyFx_jOzPszDa6AfilnxqnJgJm6vY/export?format=csv"
+)
+DEFAULT_WEBCHAT_URL = (
+    "https://copilotstudio.microsoft.com/environments/"
+    "Default-44467e6f-462c-4ea2-823f-7800de5434e3/bots/"
+    "cr29b_agentXheyuy/webchat?__version__=2"
 )
 
 
@@ -43,157 +45,13 @@ def inject_button_styles() -> None:
 
 
 def initialize_session_state() -> None:
-    """Create the session state values required by the dashboard and chat UI."""
+    """Initialize only the dashboard navigation state."""
     st.session_state.setdefault("section", "Overview")
-    st.session_state.setdefault("messages", [])
-    st.session_state.setdefault("conversation_id", None)
-    st.session_state.setdefault("watermark", None)
-    st.session_state.setdefault("direct_line_token", None)
 
 
-def build_direct_line_headers(token: str) -> dict[str, str]:
-    """Build common Direct Line headers using the bearer token from secrets."""
-    return {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
-
-
-def start_direct_line_conversation(token: str) -> str:
-    """Start a Direct Line conversation and return its conversation id."""
-    response = requests.post(
-        f"{DIRECT_LINE_BASE_URL}/conversations",
-        headers=build_direct_line_headers(token),
-        timeout=REQUEST_TIMEOUT,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    conversation_id = payload.get("conversationId")
-
-    if not conversation_id:
-        raise ValueError("Direct Line did not return a conversationId.")
-
-    return conversation_id
-
-
-def send_direct_line_message(token: str, conversation_id: str, message_text: str) -> None:
-    """Send a message activity into the existing Direct Line conversation."""
-    payload = {
-        "type": "message",
-        "from": {"id": USER_ID},
-        "text": message_text,
-    }
-
-    response = requests.post(
-        f"{DIRECT_LINE_BASE_URL}/conversations/{conversation_id}/activities",
-        headers=build_direct_line_headers(token),
-        json=payload,
-        timeout=REQUEST_TIMEOUT,
-    )
-    response.raise_for_status()
-
-
-def fetch_direct_line_activities(
-    token: str, conversation_id: str, watermark: str | None
-) -> tuple[list[dict], str | None]:
-    """Fetch new activities since the last known watermark."""
-    params = {}
-    if watermark:
-        params["watermark"] = watermark
-
-    response = requests.get(
-        f"{DIRECT_LINE_BASE_URL}/conversations/{conversation_id}/activities",
-        headers=build_direct_line_headers(token),
-        params=params,
-        timeout=REQUEST_TIMEOUT,
-    )
-    response.raise_for_status()
-
-    payload = response.json()
-    return payload.get("activities", []), payload.get("watermark")
-
-
-def get_copilot_token_endpoint() -> str:
-    """Read the Copilot Studio token endpoint from Streamlit secrets."""
-    try:
-        return st.secrets["COPILOT_TOKEN_ENDPOINT"]
-    except Exception as exc:  # noqa: BLE001
-        # Keep backward compatibility with the earlier secret name so existing
-        # local setups do not break while users move to the proper token endpoint.
-        legacy_value = st.secrets.get("COPILOT_CONNECTION_URL")
-        if legacy_value:
-            return legacy_value
-        raise ValueError(
-            "Missing COPILOT_TOKEN_ENDPOINT in Streamlit secrets. In Copilot Studio, "
-            "copy the Token Endpoint from Channels and add it to "
-            ".streamlit/secrets.toml before using Copilot Chat."
-        ) from exc
-
-
-def fetch_direct_line_session_from_copilot(token_endpoint: str) -> tuple[str, str | None]:
-    """Exchange the Copilot Studio token endpoint for a Direct Line token and session."""
-    response = requests.get(
-        token_endpoint,
-        headers={"Accept": "application/json"},
-        timeout=REQUEST_TIMEOUT,
-    )
-    response.raise_for_status()
-
-    payload = response.json()
-    token = payload.get("token")
-    if not token:
-        raise ValueError("Copilot Studio did not return a Direct Line token.")
-
-    return token, payload.get("conversationId")
-
-
-def ensure_conversation_started() -> bool:
-    """Ensure the chat session has a Direct Line conversation id."""
-    if st.session_state.conversation_id:
-        return True
-
-    try:
-        token_endpoint = get_copilot_token_endpoint()
-        token, conversation_id = fetch_direct_line_session_from_copilot(token_endpoint)
-        st.session_state.direct_line_token = token
-        st.session_state.conversation_id = conversation_id or start_direct_line_conversation(
-            token
-        )
-        st.session_state.watermark = None
-        return True
-    except requests.RequestException as exc:
-        st.error(
-            "Unable to start the Copilot Studio conversation. Verify that "
-            "COPILOT_TOKEN_ENDPOINT is the Token Endpoint copied from Copilot Studio "
-            "Channels, not the Web app connection string. "
-            f"Details: {exc}"
-        )
-    except ValueError as exc:
-        st.error(str(exc))
-
-    return False
-
-
-def append_bot_messages(activities: list[dict]) -> int:
-    """Store only bot-authored text messages in the chat transcript."""
-    bot_message_count = 0
-
-    for activity in activities:
-        if activity.get("type") != "message":
-            continue
-
-        sender = activity.get("from", {})
-        sender_id = sender.get("id")
-        text = activity.get("text", "")
-
-        # Ignore the user's echoed activity and only keep bot-authored text replies.
-        if sender_id == USER_ID or not text:
-            continue
-
-        st.session_state.messages.append({"role": "assistant", "content": text})
-        bot_message_count += 1
-
-    return bot_message_count
+def get_webchat_url() -> str:
+    """Read the public Copilot Studio webchat URL from secrets or use the default."""
+    return st.secrets.get("COPILOT_WEBCHAT_URL", DEFAULT_WEBCHAT_URL)
 
 
 def render_header() -> None:
@@ -212,7 +70,7 @@ def render_header() -> None:
 
 
 def render_sidebar_navigation() -> None:
-    """Render sidebar branding and section navigation."""
+    """Render sidebar branding and dashboard navigation."""
     st.sidebar.image("gies_logo.jpg", width=140)
     st.sidebar.title("Magelli Opportunity Intelligence")
     st.sidebar.write(
@@ -227,7 +85,6 @@ def render_sidebar_navigation() -> None:
         "Industry Trends",
         "All Leads",
         "Lead Detail View",
-        "Copilot Chat",
     ]
 
     if st.sidebar.button("Overview", use_container_width=True):
@@ -255,12 +112,6 @@ def render_sidebar_navigation() -> None:
     if st.sidebar.button("Lead Detail View", use_container_width=True):
         st.session_state.section = "Lead Detail View"
 
-    st.sidebar.markdown("---")
-
-    if st.sidebar.button("Copilot Chat", use_container_width=True):
-        st.session_state.section = "Copilot Chat"
-
-    # Keep the current section valid if the default changes in the future.
     if st.session_state.section not in navigation_sections:
         st.session_state.section = "Overview"
 
@@ -392,7 +243,7 @@ def render_lead_detail_view(df: pd.DataFrame) -> None:
 
 
 def render_dashboard_section(section: str) -> None:
-    """Render the existing dashboard views for the selected section."""
+    """Render the selected dashboard view."""
     try:
         df = load_leads_data()
     except Exception as exc:  # noqa: BLE001
@@ -421,81 +272,21 @@ def render_dashboard_section(section: str) -> None:
         render_lead_detail_view(df)
 
 
-def render_chat_history() -> None:
-    """Render the current conversation transcript."""
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-
-
-def render_copilot_chat() -> None:
-    """Render the Copilot Studio chat UI backed by Direct Line."""
+def render_copilot_webchat() -> None:
+    """Render the public Copilot Studio webchat at the bottom of the page."""
+    st.markdown("---")
     st.subheader("Copilot Chat")
-    st.caption("Chat directly with the Microsoft Copilot Studio agent via Direct Line.")
+    st.caption("Chat with the public Copilot Studio agent directly from this page.")
 
-    # Start the Direct Line conversation once and reuse it across reruns.
-    if not ensure_conversation_started():
-        return
-
-    render_chat_history()
-
-    user_prompt = st.chat_input("Ask the Copilot Studio agent a question")
-    if not user_prompt:
-        return
-
-    st.session_state.messages.append({"role": "user", "content": user_prompt})
-    with st.chat_message("user"):
-        st.markdown(user_prompt)
-
-    try:
-        token = st.session_state.direct_line_token
-        if not token:
-            token_endpoint = get_copilot_token_endpoint()
-            token, conversation_id = fetch_direct_line_session_from_copilot(token_endpoint)
-            st.session_state.direct_line_token = token
-            if conversation_id and not st.session_state.conversation_id:
-                st.session_state.conversation_id = conversation_id
-    except ValueError as exc:
-        st.error(str(exc))
-        return
-    except requests.RequestException as exc:
-        st.error(
-            "Unable to retrieve a Direct Line token from Copilot Studio. "
-            "Check that the secret points to the Token Endpoint from Copilot Studio "
-            f"Channels. Details: {exc}"
-        )
-        return
-
-    with st.spinner("Agent is thinking..."):
-        try:
-            # Post the user's activity to the existing conversation first.
-            send_direct_line_message(
-                token=token,
-                conversation_id=st.session_state.conversation_id,
-                message_text=user_prompt,
-            )
-            # Then pull back only activities newer than the last saved watermark.
-            activities, new_watermark = fetch_direct_line_activities(
-                token=token,
-                conversation_id=st.session_state.conversation_id,
-                watermark=st.session_state.watermark,
-            )
-        except requests.RequestException as exc:
-            st.error(f"Unable to exchange messages with the Copilot Studio agent: {exc}")
-            return
-
-    # Persist the latest watermark so old activities are not replayed on rerun.
-    st.session_state.watermark = new_watermark or st.session_state.watermark
-    bot_message_count = append_bot_messages(activities)
-
-    if bot_message_count == 0:
-        st.warning("The agent did not return a text response for that message.")
-        return
-
-    # Render only the newly added bot messages after the API call completes.
-    for message in st.session_state.messages[-bot_message_count:]:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+    webchat_url = get_webchat_url()
+    iframe_markup = f"""
+    <iframe
+        src="{webchat_url}"
+        frameborder="0"
+        style="width: 100%; height: 720px; border: 1px solid rgba(49, 51, 63, 0.2); border-radius: 12px;"
+    ></iframe>
+    """
+    components.html(iframe_markup, height=740)
 
 
 def main() -> None:
@@ -503,12 +294,8 @@ def main() -> None:
     initialize_session_state()
     render_header()
     render_sidebar_navigation()
-
-    section = st.session_state.section
-    if section == "Copilot Chat":
-        render_copilot_chat()
-    else:
-        render_dashboard_section(section)
+    render_dashboard_section(st.session_state.section)
+    render_copilot_webchat()
 
 
 if __name__ == "__main__":
