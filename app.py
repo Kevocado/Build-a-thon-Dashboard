@@ -1,6 +1,7 @@
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+import plotly.graph_objects as go
 from io import BytesIO
 from streamlit_autorefresh import st_autorefresh
 
@@ -217,6 +218,20 @@ def _card_class(t: str) -> str:
     return {"A": "lc-a", "B": "lc-b", "C": "lc-c"}.get(str(t).upper(), "lc-d")
 
 
+def _email_draft(company: str, role: str, project: str, owner: str) -> str:
+    return (
+        f"Subject: Consulting Opportunity – {company}\n\n"
+        f"Hi,\n\n"
+        f"I'm reaching out from the Magelli Office of Experiential Learning at Gies College of Business, "
+        f"University of Illinois Urbana-Champaign.\n\n"
+        f"We noticed {company} is hiring for a {role} role, and believe this represents a strong fit "
+        f"for a student consulting engagement. Based on our analysis, a {project} project could deliver "
+        f"immediate value while giving your team dedicated analytical support.\n\n"
+        f"Would you be open to a brief call to explore this further?\n\n"
+        f"Best regards,\n{owner}\nMagelli Office of Experiential Learning\nGies College of Business"
+    )
+
+
 def render_lead_card(row: pd.Series) -> None:
     """Render a single lead as a styled dark card."""
     tier     = str(row.get("tier", "D")).upper()
@@ -256,6 +271,12 @@ def render_lead_card(row: pd.Series) -> None:
       <div class="rationale-text">{rationale}</div>
     </div>
     """, unsafe_allow_html=True)
+
+    # Outreach email expander below the card
+    with st.expander("✉ Draft outreach email"):
+        draft = _email_draft(company, role, project, owner)
+        st.text_area("Email draft", value=draft, height=220, key=f"email_{company}_{role}",
+                     label_visibility="collapsed")
 
 
 def render_filters(df: pd.DataFrame, default_tiers: list[str] | None = None) -> tuple:
@@ -304,17 +325,83 @@ def export_button(data: pd.DataFrame, label: str = "⬇ Export to Excel",
 # ── SECTION RENDERERS ─────────────────────────────────────────────────────────
 
 def render_overview(df: pd.DataFrame) -> None:
-    total_leads = len(df)
-    flagged_leads = len(df[df["flagged"].astype(str).str.lower() == "yes"])
-    avg_score = round(df["score"].mean(), 1) if df["score"].notna().any() else 0
+    total_leads   = len(df)
+    flagged_leads = len(df[df["flagged"].astype(str).str.lower() == "yes"]) if "flagged" in df.columns else 0
+    avg_score     = round(df["score"].mean(), 1) if df["score"].notna().any() else 0
+    tier_a = len(df[df["tier"] == "A"]) if "tier" in df.columns else 0
+    tier_b = len(df[df["tier"] == "B"]) if "tier" in df.columns else 0
+    tier_c = len(df[df["tier"] == "C"]) if "tier" in df.columns else 0
+    tier_d = len(df[df["tier"] == "D"]) if "tier" in df.columns else 0
 
     st.subheader("Overview")
     st.caption("Summary of overall opportunity pipeline and scoring performance.")
 
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Total Leads", total_leads)
-    m2.metric("Flagged for Outreach", flagged_leads)
-    m3.metric("Average Score", avg_score)
+    # Styled stat cards
+    c1, c2, c3, c4, c5 = st.columns(5)
+    cards = [
+        (c1, "Total Scored",      total_leads,   "#e8eef7"),
+        (c2, "Tier A",            tier_a,        "#00e97a"),
+        (c3, "Tier B",            tier_b,        "#3d8ef8"),
+        (c4, "Tier C",            tier_c,        "#f5a623"),
+        (c5, "Flagged",           flagged_leads, "#e8eef7"),
+    ]
+    for col, label, val, color in cards:
+        with col:
+            st.markdown(f"""
+            <div class="stat-card" style="background:#0d1117;border:1px solid #1e2d45;border-radius:10px;padding:18px 20px;">
+              <div style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.8px;color:#4a5878;margin-bottom:8px;">{label}</div>
+              <div style="font-size:30px;font-weight:600;letter-spacing:-1px;color:{color};">{val}</div>
+            </div>""", unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Charts row
+    ch1, ch2 = st.columns([1, 2])
+
+    with ch1:
+        st.markdown('<div class="section-divider">Tier Breakdown</div>', unsafe_allow_html=True)
+        tier_counts = [tier_a, tier_b, tier_c, tier_d]
+        fig_donut = go.Figure(go.Pie(
+            labels=["Tier A", "Tier B", "Tier C", "Tier D"],
+            values=tier_counts,
+            hole=0.65,
+            marker=dict(colors=["#00e97a", "#3d8ef8", "#f5a623", "#253650"]),
+            textinfo="none",
+            hovertemplate="<b>%{label}</b><br>%{value} leads<extra></extra>",
+        ))
+        fig_donut.add_annotation(
+            text=f"<b>{flagged_leads}</b><br>flagged",
+            x=0.5, y=0.5, showarrow=False,
+            font=dict(size=15, color="#e8eef7"),
+        )
+        fig_donut.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            showlegend=True,
+            legend=dict(font=dict(color="#8b9ab5", size=12), bgcolor="rgba(0,0,0,0)"),
+            margin=dict(t=0, b=0, l=0, r=0), height=220,
+        )
+        st.plotly_chart(fig_donut, use_container_width=True)
+
+    with ch2:
+        st.markdown('<div class="section-divider">Score Distribution</div>', unsafe_allow_html=True)
+        fig_hist = go.Figure(go.Histogram(
+            x=df["score"].dropna(),
+            nbinsx=20,
+            marker=dict(color="#3d8ef8", opacity=0.8),
+            hovertemplate="Score: %{x}<br>Count: %{y}<extra></extra>",
+        ))
+        fig_hist.add_vline(x=82, line_color="#00e97a", line_dash="dash",
+                           annotation_text="Tier A", annotation_font_color="#00e97a")
+        fig_hist.add_vline(x=69, line_color="#3d8ef8", line_dash="dash",
+                           annotation_text="Tier B", annotation_font_color="#3d8ef8")
+        fig_hist.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(color="#4a5878", gridcolor="#141b26", title="Score"),
+            yaxis=dict(color="#8b9ab5", gridcolor="#141b26"),
+            margin=dict(t=20, b=0, l=0, r=0), height=220,
+            font=dict(color="#8b9ab5"),
+        )
+        st.plotly_chart(fig_hist, use_container_width=True)
 
     st.markdown("### What this dashboard does")
     st.write(
@@ -366,8 +453,11 @@ def render_signal_insights(df: pd.DataFrame) -> None:
     st.caption("Breakdown of hiring and business signals driving opportunity scores.")
 
     if "signals" in df.columns:
-        signal_counts = df["signals"].fillna("No signal listed").value_counts()
+        all_signals = df["signals"].dropna().str.split(",").explode().str.strip()
+        signal_counts = all_signals[all_signals != ""].value_counts()
         st.bar_chart(signal_counts)
+        st.dataframe(signal_counts.rename("Count").reset_index().rename(columns={"index": "Signal"}),
+                     use_container_width=True, hide_index=True)
     else:
         st.info("No signal data available yet.")
 
