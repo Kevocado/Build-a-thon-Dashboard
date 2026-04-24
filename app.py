@@ -4,59 +4,34 @@ import pandas as pd
 st.set_page_config(page_title="Magelli Lead Dashboard", layout="wide")
 
 st.title("Magelli Consulting Opportunity Dashboard")
-st.caption("AI-powered lead scoring and recommended outreach actions")
 
-uploaded_file = st.file_uploader("Upload scored lead data", type=["csv", "xlsx"])
+csv_url = "https://docs.google.com/spreadsheets/d/1ANLigqPcPFjGn1hB2mwcvtcZupWmf0jhXjkguq3pcI0/export?format=csv"
 
-if uploaded_file:
-    if uploaded_file.name.endswith(".csv"):
-        df = pd.read_csv(uploaded_file)
-    else:
-        df = pd.read_excel(uploaded_file)
+df = pd.read_csv(csv_url)
 
-    st.success("Data loaded successfully")
 
-    st.subheader("All Leads")
-    st.dataframe(df, use_container_width=True)
+# Normalize column names (VERY IMPORTANT)
+df.columns = df.columns.str.lower()
 
-    if "CLIPPED SCORE" in df.columns:
-        score_col = "CLIPPED SCORE"
-    elif "Score" in df.columns:
-        score_col = "Score"
-    else:
-        score_col = df.columns[0]
+st.success("Live Google Sheet connected successfully")
 
-    if "FLAGGED" in df.columns:
-        flagged_col = "FLAGGED"
-    elif "Flagged" in df.columns:
-        flagged_col = "Flagged"
-    else:
-        flagged_col = None
+st.subheader("All Leads")
+st.dataframe(df)
 
-    st.subheader("Top Recommended Opportunities")
+# Top leads
+top = df[df["flagged"].astype(str).str.lower() == "yes"]
+top = top.sort_values(by="score", ascending=False).head(5)
 
-    if flagged_col:
-        top = df[df[flagged_col].astype(str).str.lower() == "yes"]
-    else:
-        top = df
+st.subheader("Top Recommended Opportunities")
+st.dataframe(top)
 
-    top = top.sort_values(by=score_col, ascending=False).head(5)
-    st.dataframe(top, use_container_width=True)
+# Recommended actions
+st.subheader("Recommended Actions")
 
-    st.subheader("Recommended Actions")
-
-    for _, row in top.iterrows():
-        company = row.get("Company", "Unknown Company")
-        role = row.get("Role", "Unknown Role")
-        score = row.get(score_col, "")
-        tier = row.get("TIER", row.get("Tier", ""))
-
-        st.markdown(f"""
-        **{company}**  
-        Role: {role}  
-        Score: {score} | Tier: {tier}  
-        Recommended action: Contact this week and route to advisor review.
-        """)
-
-else:
-    st.info("Upload a CSV or Excel file to view the dashboard.")
+for _, row in top.iterrows():
+    st.markdown(f"""
+    **{row['company']}**  
+    Role: {row['role']}  
+    Score: {row['score']} | Tier: {row['tier']}  
+    Recommended action: Contact this week.
+    """)
