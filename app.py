@@ -6,11 +6,6 @@ import streamlit as st
 DIRECT_LINE_BASE_URL = "https://directline.botframework.com/v3/directline"
 USER_ID = "streamlit-user"
 REQUEST_TIMEOUT = 30
-COPILOT_CONNECTION_URL = (
-    "https://default44467e6f462c4ea2823f7800de5434.e3.environment.api.powerplatform.com/"
-    "copilotstudio/dataverse-backed/authenticated/bots/cr29b_agentXheyuy/"
-    "conversations?api-version=2022-03-01-preview"
-)
 CSV_URL = (
     "https://docs.google.com/spreadsheets/d/"
     "1DfkJfbrmAYICQaxyFx_jOzPszDa6AfilnxqnJgJm6vY/export?format=csv"
@@ -118,23 +113,27 @@ def fetch_direct_line_activities(
     return payload.get("activities", []), payload.get("watermark")
 
 
-def get_copilot_connection_url() -> str:
-    """Read the Copilot Studio connection URL from secrets or use the provided default."""
+def get_copilot_token_endpoint() -> str:
+    """Read the Copilot Studio token endpoint from Streamlit secrets."""
     try:
-        return st.secrets["COPILOT_CONNECTION_URL"]
+        return st.secrets["COPILOT_TOKEN_ENDPOINT"]
     except Exception as exc:  # noqa: BLE001
-        if COPILOT_CONNECTION_URL:
-            return COPILOT_CONNECTION_URL
+        # Keep backward compatibility with the earlier secret name so existing
+        # local setups do not break while users move to the proper token endpoint.
+        legacy_value = st.secrets.get("COPILOT_CONNECTION_URL")
+        if legacy_value:
+            return legacy_value
         raise ValueError(
-            "Missing COPILOT_CONNECTION_URL in Streamlit secrets. Add it to "
+            "Missing COPILOT_TOKEN_ENDPOINT in Streamlit secrets. In Copilot Studio, "
+            "copy the Token Endpoint from Channels and add it to "
             ".streamlit/secrets.toml before using Copilot Chat."
         ) from exc
 
 
-def fetch_direct_line_token_from_copilot(connection_url: str) -> str:
-    """Exchange the Copilot Studio connection URL for a Direct Line token."""
+def fetch_direct_line_session_from_copilot(token_endpoint: str) -> tuple[str, str | None]:
+    """Exchange the Copilot Studio token endpoint for a Direct Line token and session."""
     response = requests.get(
-        connection_url,
+        token_endpoint,
         headers={"Accept": "application/json"},
         timeout=REQUEST_TIMEOUT,
     )
@@ -145,7 +144,7 @@ def fetch_direct_line_token_from_copilot(connection_url: str) -> str:
     if not token:
         raise ValueError("Copilot Studio did not return a Direct Line token.")
 
-    return token
+    return token, payload.get("conversationId")
 
 
 def ensure_conversation_started() -> bool:
@@ -154,14 +153,21 @@ def ensure_conversation_started() -> bool:
         return True
 
     try:
-        connection_url = get_copilot_connection_url()
-        token = fetch_direct_line_token_from_copilot(connection_url)
+        token_endpoint = get_copilot_token_endpoint()
+        token, conversation_id = fetch_direct_line_session_from_copilot(token_endpoint)
         st.session_state.direct_line_token = token
-        st.session_state.conversation_id = start_direct_line_conversation(token)
+        st.session_state.conversation_id = conversation_id or start_direct_line_conversation(
+            token
+        )
         st.session_state.watermark = None
         return True
     except requests.RequestException as exc:
-        st.error(f"Unable to start the Copilot Studio conversation: {exc}")
+        st.error(
+            "Unable to start the Copilot Studio conversation. Verify that "
+            "COPILOT_TOKEN_ENDPOINT is the Token Endpoint copied from Copilot Studio "
+            "Channels, not the Web app connection string. "
+            f"Details: {exc}"
+        )
     except ValueError as exc:
         st.error(str(exc))
 
@@ -444,14 +450,20 @@ def render_copilot_chat() -> None:
     try:
         token = st.session_state.direct_line_token
         if not token:
-            connection_url = get_copilot_connection_url()
-            token = fetch_direct_line_token_from_copilot(connection_url)
+            token_endpoint = get_copilot_token_endpoint()
+            token, conversation_id = fetch_direct_line_session_from_copilot(token_endpoint)
             st.session_state.direct_line_token = token
+            if conversation_id and not st.session_state.conversation_id:
+                st.session_state.conversation_id = conversation_id
     except ValueError as exc:
         st.error(str(exc))
         return
     except requests.RequestException as exc:
-        st.error(f"Unable to retrieve a Direct Line token from Copilot Studio: {exc}")
+        st.error(
+            "Unable to retrieve a Direct Line token from Copilot Studio. "
+            "Check that the secret points to the Token Endpoint from Copilot Studio "
+            f"Channels. Details: {exc}"
+        )
         return
 
     with st.spinner("Agent is thinking..."):
