@@ -6,6 +6,11 @@ import streamlit as st
 DIRECT_LINE_BASE_URL = "https://directline.botframework.com/v3/directline"
 USER_ID = "streamlit-user"
 REQUEST_TIMEOUT = 30
+COPILOT_CONNECTION_URL = (
+    "https://default44467e6f462c4ea2823f7800de5434.e3.environment.api.powerplatform.com/"
+    "copilotstudio/dataverse-backed/authenticated/bots/cr29b_agentXheyuy/"
+    "conversations?api-version=2022-03-01-preview"
+)
 CSV_URL = (
     "https://docs.google.com/spreadsheets/d/"
     "1DfkJfbrmAYICQaxyFx_jOzPszDa6AfilnxqnJgJm6vY/export?format=csv"
@@ -48,6 +53,7 @@ def initialize_session_state() -> None:
     st.session_state.setdefault("messages", [])
     st.session_state.setdefault("conversation_id", None)
     st.session_state.setdefault("watermark", None)
+    st.session_state.setdefault("direct_line_token", None)
 
 
 def build_direct_line_headers(token: str) -> dict[str, str]:
@@ -112,15 +118,33 @@ def fetch_direct_line_activities(
     return payload.get("activities", []), payload.get("watermark")
 
 
-def get_direct_line_token() -> str:
-    """Read the Direct Line token from Streamlit secrets."""
+def get_copilot_connection_url() -> str:
+    """Read the Copilot Studio connection URL from secrets or use the provided default."""
     try:
-        token = st.secrets["DIRECT_LINE_TOKEN"]
+        return st.secrets["COPILOT_CONNECTION_URL"]
     except Exception as exc:  # noqa: BLE001
+        if COPILOT_CONNECTION_URL:
+            return COPILOT_CONNECTION_URL
         raise ValueError(
-            "Missing DIRECT_LINE_TOKEN in Streamlit secrets. Add it to "
+            "Missing COPILOT_CONNECTION_URL in Streamlit secrets. Add it to "
             ".streamlit/secrets.toml before using Copilot Chat."
         ) from exc
+
+
+def fetch_direct_line_token_from_copilot(connection_url: str) -> str:
+    """Exchange the Copilot Studio connection URL for a Direct Line token."""
+    response = requests.get(
+        connection_url,
+        headers={"Accept": "application/json"},
+        timeout=REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
+
+    payload = response.json()
+    token = payload.get("token")
+    if not token:
+        raise ValueError("Copilot Studio did not return a Direct Line token.")
+
     return token
 
 
@@ -130,7 +154,9 @@ def ensure_conversation_started() -> bool:
         return True
 
     try:
-        token = get_direct_line_token()
+        connection_url = get_copilot_connection_url()
+        token = fetch_direct_line_token_from_copilot(connection_url)
+        st.session_state.direct_line_token = token
         st.session_state.conversation_id = start_direct_line_conversation(token)
         st.session_state.watermark = None
         return True
@@ -416,9 +442,16 @@ def render_copilot_chat() -> None:
         st.markdown(user_prompt)
 
     try:
-        token = get_direct_line_token()
+        token = st.session_state.direct_line_token
+        if not token:
+            connection_url = get_copilot_connection_url()
+            token = fetch_direct_line_token_from_copilot(connection_url)
+            st.session_state.direct_line_token = token
     except ValueError as exc:
         st.error(str(exc))
+        return
+    except requests.RequestException as exc:
+        st.error(f"Unable to retrieve a Direct Line token from Copilot Studio: {exc}")
         return
 
     with st.spinner("Agent is thinking..."):
