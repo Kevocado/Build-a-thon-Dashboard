@@ -5,7 +5,7 @@ import streamlit.components.v1 as components
 
 CSV_URL = (
     "https://docs.google.com/spreadsheets/d/"
-    "1DfkJfbrmAYICQaxyFx_jOzPszDa6AfilnxqnJgJm6vY/export?format=csv"
+    "1DfkJfbrmAYICQaxyFx_jOzPszDa6AfilnxqnJgJm6vY/gviz/tq?tqx=out:csv&sheet=Final_Leads"
 )
 DEFAULT_WEBCHAT_URL = (
     "https://copilotstudio.microsoft.com/environments/"
@@ -125,6 +125,13 @@ def load_leads_data() -> pd.DataFrame:
     return dataframe
 
 
+def format_score(score: object) -> str:
+    """Render missing scores as N/A instead of pandas NaN."""
+    if pd.isna(score):
+        return "N/A"
+    return str(score)
+
+
 def render_overview(df: pd.DataFrame) -> None:
     total_leads = len(df)
     flagged_leads = len(df[df["flagged"].astype(str).str.lower() == "yes"])
@@ -170,7 +177,7 @@ def render_recommended_actions(df: pd.DataFrame) -> None:
             f"""
             **{row.get('company', 'Unknown Company')}**  
             Role: {row.get('role', 'N/A')}  
-            Score: {row.get('score', 'N/A')} | Tier: {row.get('tier', 'N/A')}  
+            Score: {format_score(row.get('score'))} | Tier: {row.get('tier', 'N/A')}  
             Recommended action: {row.get('recommended_action', 'Contact this week.')}
             """
         )
@@ -228,7 +235,7 @@ def render_lead_detail_view(df: pd.DataFrame) -> None:
 
         **Role:** {selected_row.get('role', 'N/A')}  
         **Location:** {selected_row.get('location', 'N/A')}  
-        **Score:** {selected_row.get('score', 'N/A')}  
+        **Score:** {format_score(selected_row.get('score'))}  
         **Tier:** {selected_row.get('tier', 'N/A')}  
         **Flagged:** {selected_row.get('flagged', 'N/A')}  
 
